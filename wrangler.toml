@@ -1,0 +1,8 @@
+name = "redeye-anticheat"
+main = "cloudflare_worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "REDEYE_DB"
+database_name = "redeye-anticheat-db"
+database_id = ""
