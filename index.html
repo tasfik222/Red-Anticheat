@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RED EYE AntiCheat Dashboard</title>
+<style>
+  :root {
+    --bg:      #0a0a0f;
+    --surface: #12121a;
+    --card:    #1a1a26;
+    --border:  #2a2a3a;
+    --red:     #ff3355;
+    --orange:  #ff8833;
+    --green:   #00cc66;
+    --blue:    #3399ff;
+    --text:    #e0e0f0;
+    --muted:   #6666aa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #1a0a1a, #0a0a1a);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo { font-size: 22px; font-weight: 800; color: var(--red); letter-spacing: 2px; }
+  .logo span { color: var(--text); }
+  .header-sub { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  /* ── Key Input Section ── */
+  #keySection {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 65px);
+    gap: 20px;
+    padding: 20px;
+  }
+  .key-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 420px;
+    text-align: center;
+  }
+  .key-card h2 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
+  .key-card p  { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+  .key-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 18px;
+    font-family: monospace;
+    padding: 12px 16px;
+    text-align: center;
+    letter-spacing: 2px;
+    outline: none;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+  .key-input:focus { border-color: var(--red); }
+  .key-btn {
+    width: 100%;
+    background: var(--red);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .key-btn:hover { opacity: 0.85; }
+  .key-error { color: var(--red); font-size: 13px; margin-top: 12px; display: none; }
+
+  /* ── Dashboard ── */
+  #dashboard { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+
+  /* Status Bar */
+  .status-bar {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .status-dot.online  { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+  .status-dot.offline { background: var(--red); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .status-text { font-weight: 700; font-size: 15px; }
+  .status-meta { color: var(--muted); font-size: 13px; margin-left: auto; }
+  .info-chips { display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chip b { color: var(--text); }
+
+  /* Event count badges */
+  .stats-row { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat-card {
+    flex: 1; min-width: 120px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat-num  { font-size: 28px; font-weight: 800; }
+  .stat-label{ font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .red    { color: var(--red); }
+  .orange { color: var(--orange); }
+  .blue   { color: var(--blue); }
+  .green  { color: var(--green); }
+
+  /* Events List */
+  .section-title {
+    font-size: 13px; font-weight: 700;
+    color: var(--muted); letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  #eventsList { display: flex; flex-direction: column; gap: 8px; }
+
+  .event-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 8px;
+    padding: 14px 16px;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+  .event-card.HIGH   { border-left-color: var(--red); }
+  .event-card.MEDIUM { border-left-color: var(--orange); }
+  .event-card.LOW    { border-left-color: var(--blue); }
+  .event-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .event-badge {
+    font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .HIGH   .event-badge { background: #ff335520; color: var(--red); }
+  .MEDIUM .event-badge { background: #ff883320; color: var(--orange); }
+  .LOW    .event-badge { background: #3399ff20; color: var(--blue); }
+  .event-title { font-weight: 700; font-size: 14px; }
+  .event-time  { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .event-desc  { font-size: 13px; color: #aaaacc; line-height: 1.5; white-space: pre-line; }
+
+  .no-events {
+    text-align: center; color: var(--muted);
+    padding: 60px 20px; font-size: 14px;
+  }
+  .no-events .icon { font-size: 40px; margin-bottom: 10px; }
+
+  /* Refresh indicator */
+  .refresh-row {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .refresh-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .refresh-btn:hover { color: var(--text); }
+  .auto-badge {
+    font-size: 11px; color: var(--green);
+    display: flex; align-items: center; gap: 4px;
+  }
+
+  /* Top alerts */
+  .top-alert {
+    background: #ff335510;
+    border: 1px solid #ff335540;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--red);
+    margin-bottom: 16px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">RED<span> EYE</span></div>
+  <div style="font-size:13px;color:var(--muted)">AntiCheat Dashboard</div>
+  <div class="header-sub" id="headerKey"></div>
+</div>
+
+<!-- Key Input -->
+<div id="keySection">
+  <div class="key-card">
+    <div style="font-size:36px;margin-bottom:12px">👁️</div>
+    <h2>Enter Session Key</h2>
+    <p>AntiCheat tool চালু করলে যে key দেখাবে সেটা এখানে দিন</p>
+    <input class="key-input" id="keyInput" type="text"
+           placeholder="RED-XXXX-XXXX"
+           maxlength="13" autocomplete="off" spellcheck="false">
+    <button class="key-btn" onclick="connectKey()">Connect →</button>
+    <div class="key-error" id="keyError">❌ Invalid or expired key</div>
+  </div>
+</div>
+
+<!-- Dashboard -->
+<div id="dashboard">
+  <div class="top-alert" id="offlineAlert">
+    ⚠️ AntiCheat tool is OFFLINE — heartbeat not received for over 60 seconds!
+  </div>
+
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <div class="status-text" id="statusText">Connecting...</div>
+    <div class="info-chips">
+      <div class="chip">PC: <b id="infoPC">—</b></div>
+      <div class="chip">User: <b id="infoUser">—</b></div>
+      <div class="chip">HWID: <b id="infoHWID">—</b></div>
+    </div>
+    <div class="status-meta" id="lastSeen"></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-num red" id="countHigh">0</div><div class="stat-label">Critical</div></div>
+    <div class="stat-card"><div class="stat-num orange" id="countMed">0</div><div class="stat-label">Medium</div></div>
+    <div class="stat-card"><div class="stat-num blue" id="countLow">0</div><div class="stat-label">Low</div></div>
+    <div class="stat-card"><div class="stat-num green" id="countTotal">0</div><div class="stat-label">Total</div></div>
+  </div>
+
+  <!-- Events -->
+  <div class="refresh-row">
+    <div class="section-title">Detection Events</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="auto-badge">🟢 Auto-refresh 5s</div>
+      <button class="refresh-btn" onclick="loadEvents()">↻ Refresh</button>
+    </div>
+  </div>
+  <div id="eventsList">
+    <div class="no-events"><div class="icon">🔍</div>No detections yet</div>
+  </div>
+</div>
+
+<script>
+const API = "https://redeye-anticheat.tasfikonim3.workers.dev"; // ← আপনার Worker URL
+let currentKey = "";
+let refreshTimer = null;
+let lastEventCount = 0;
+
+// Format time
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000)  return `${Math.floor(diff/1000)}s ago`;
+  if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+  return new Date(ts).toLocaleTimeString();
+}
+
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// Key input formatting
+document.getElementById("keyInput").addEventListener("input", function() {
+  let v = this.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  let parts = [];
+  if (v.length > 0) parts.push(v.substring(0, 3));
+  if (v.length > 3) parts.push(v.substring(3, 7));
+  if (v.length > 7) parts.push(v.substring(7, 11));
+  this.value = parts.join("-");
+});
+
+document.getElementById("keyInput").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") connectKey();
+});
+
+async function connectKey() {
+  const key = document.getElementById("keyInput").value.trim();
+  if (!key || key.length < 10) {
+    showError("Please enter a valid key");
+    return;
+  }
+
+  document.querySelector(".key-btn").textContent = "Connecting...";
+  document.getElementById("keyError").style.display = "none";
+
+  const res = await fetch(`${API}/api/events?key=${key}`).catch(() => null);
+  if (!res || !res.ok) {
+    showError("Invalid or expired key");
+    document.querySelector(".key-btn").textContent = "Connect →";
+    return;
+  }
+
+  const data = await res.json();
+  if (!data.success) {
+    showError(data.error || "Invalid key");
+    document.querySelector(".key-btn").textContent = "Connect →";
+    return;
+  }
+
+  currentKey = key;
+  document.getElementById("keySection").style.display = "none";
+  document.getElementById("dashboard").style.display = "block";
+  document.getElementById("headerKey").textContent = key;
+
+  renderData(data);
+  refreshTimer = setInterval(loadEvents, 5000);
+}
+
+function showError(msg) {
+  const el = document.getElementById("keyError");
+  el.textContent = "❌ " + msg;
+  el.style.display = "block";
+}
+
+async function loadEvents() {
+  if (!currentKey) return;
+  const res = await fetch(`${API}/api/events?key=${currentKey}`).catch(() => null);
+  if (!res || !res.ok) return;
+  const data = await res.json();
+  if (data.success) renderData(data);
+}
+
+function renderData(data) {
+  // Status
+  const dot  = document.getElementById("statusDot");
+  const text = document.getElementById("statusText");
+  const offlineAlert = document.getElementById("offlineAlert");
+
+  if (data.online) {
+    dot.className  = "status-dot online";
+    text.textContent = "🟢 ONLINE — AntiCheat Active";
+    text.style.color = "var(--green)";
+    offlineAlert.style.display = "none";
+  } else {
+    dot.className  = "status-dot offline";
+    text.textContent = "🔴 OFFLINE — No heartbeat";
+    text.style.color = "var(--red)";
+    offlineAlert.style.display = "block";
+  }
+
+  document.getElementById("infoPC").textContent   = data.pc_name   || "—";
+  document.getElementById("infoUser").textContent  = data.username  || "—";
+  document.getElementById("infoHWID").textContent  = (data.hwid || "—").substring(0, 20) + "...";
+  document.getElementById("lastSeen").textContent  = "Last seen: " + timeAgo(data.last_seen);
+
+  // Stats
+  const events = data.events || [];
+  const high   = events.filter(e => e.severity === "HIGH").length;
+  const med    = events.filter(e => e.severity === "MEDIUM").length;
+  const low    = events.filter(e => e.severity === "LOW").length;
+
+  document.getElementById("countHigh").textContent  = high;
+  document.getElementById("countMed").textContent   = med;
+  document.getElementById("countLow").textContent   = low;
+  document.getElementById("countTotal").textContent  = events.length;
+
+  // New events notification
+  if (events.length > lastEventCount && lastEventCount > 0) {
+    document.title = `🚨 New Detection! — RED EYE`;
+    setTimeout(() => document.title = "RED EYE AntiCheat Dashboard", 3000);
+  }
+  lastEventCount = events.length;
+
+  // Events list (newest first)
+  const list = document.getElementById("eventsList");
+  if (!events.length) {
+    list.innerHTML = `<div class="no-events"><div class="icon">🔍</div>No detections yet</div>`;
+    return;
+  }
+
+  const sorted = [...events].reverse();
+  list.innerHTML = sorted.map(e => `
+    <div class="event-card ${e.severity}">
+      <div class="event-header">
+        <span class="event-badge">${e.severity}</span>
+        <span class="event-title">${e.title}</span>
+        <span class="event-time">${formatTime(e.timestamp)}</span>
+      </div>
+      <div class="event-desc">${e.description.replace(/`([^`]*)`/g, '<code>$1</code>')}</div>
+    </div>
+  `).join("");
+}
+</script>
+</body>
+</html>
