@@ -18,10 +18,12 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
-#include <winsvc.h>
 #include <shellapi.h>
 #include <fstream>
 #include <shlobj.h>
+#include <wintrust.h>
+#include <softpub.h>
+#include <winsvc.h>
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -188,15 +190,25 @@ std::string CreateDiscordThread() {
 }
 
 // ── Thread-এ message পাঠানো ──
+// Forward declarations
+void SendWebEvent(const std::string& type, const std::string& title,
+                  const std::string& desc, const std::string& severity);
+
 void SendDiscordAlert(const std::string& title, const std::string& description, int color = 0xFF0000) {
-    if (g_ThreadId.empty()) return;
-    std::string fullDesc = description + GetMachineInfo();
-    std::string payload =
-        "{\"embeds\":[{\"title\":\"" + JsonEscape(title) + "\","
-        "\"description\":\"" + JsonEscape(fullDesc) + "\","
-        "\"color\":" + std::to_string(color) + ","
-        "\"footer\":{\"text\":\"RED EYE AntiCheat | " + GetTimestamp() + "\"}}]}";
-    HttpPost(DISCORD_WEBHOOK_URL + "?thread_id=" + g_ThreadId, payload);
+    if (!g_ThreadId.empty()) {
+        std::string fullDesc = description + GetMachineInfo();
+        std::string payload =
+            "{\"embeds\":[{\"title\":\"" + JsonEscape(title) + "\","
+            "\"description\":\"" + JsonEscape(fullDesc) + "\","
+            "\"color\":" + std::to_string(color) + ","
+            "\"footer\":{\"text\":\"RED EYE AntiCheat | " + GetTimestamp() + "\"}}]}";
+        HttpPost(DISCORD_WEBHOOK_URL + "?thread_id=" + g_ThreadId, payload);
+    }
+    // Web Dashboard-এও পাঠানো
+    std::string severity = "HIGH";
+    if (color == 0xFFAA00) severity = "MEDIUM";
+    else if (color == 0x3498DB || color == 0x00CC44) severity = "LOW";
+    SendWebEvent(title, title, description, severity);
 }
 
 // ── Heartbeat Loop ──
@@ -252,8 +264,140 @@ void HeartbeatLoop() {
 }
 // ============================================================
 
+// ============================================================
+//  WEB DASHBOARD API INTEGRATION
+// ============================================================
+static const std::string API_BASE_URL = "";
+static std::string g_SessionKey = "";
 
+std::string ApiPost(const std::string& endpoint,
+                    const std::string& payload,
+                    const std::string& apiKey = "")
+{
+    std::string fullUrl = API_BASE_URL + endpoint;
+    std::string response;
+    URL_COMPONENTSA uc = {}; uc.dwStructSize = sizeof(uc);
+    char host[256]={}, path[1024]={};
+    uc.lpszHostName=host; uc.dwHostNameLength=sizeof(host);
+    uc.lpszUrlPath=path;  uc.dwUrlPathLength=sizeof(path);
+    if(!InternetCrackUrlA(fullUrl.c_str(),0,0,&uc)){
+        std::cout << "[API] InternetCrackUrlA failed, err=" << GetLastError() << "\n";
+        return response;
+    }
 
+    HINTERNET hI=InternetOpenA("RedEyeAC",INTERNET_OPEN_TYPE_DIRECT,0,0,0);
+    if(!hI){
+        std::cout << "[API] InternetOpenA failed, err=" << GetLastError() << "\n";
+        return response;
+    }
+
+    HINTERNET hC=InternetConnectA(hI,host,INTERNET_DEFAULT_HTTPS_PORT,0,0,INTERNET_SERVICE_HTTP,0,0);
+    if(!hC){
+        std::cout << "[API] InternetConnectA failed, err=" << GetLastError() << "\n";
+        InternetCloseHandle(hI); return response;
+    }
+
+    const char* acc[]={"application/json",NULL};
+    HINTERNET hR=HttpOpenRequestA(hC,"POST",path,0,0,acc,
+        INTERNET_FLAG_SECURE|INTERNET_FLAG_RELOAD|
+        INTERNET_FLAG_IGNORE_CERT_CN_INVALID|INTERNET_FLAG_NO_CACHE_WRITE,0);
+    if(!hR){
+        std::cout << "[API] HttpOpenRequestA failed, err=" << GetLastError() << "\n";
+        InternetCloseHandle(hC); InternetCloseHandle(hI); return response;
+    }
+
+    // Force modern TLS — WinINet does NOT reliably default to TLS 1.2/1.3 on
+    // many Windows configs, and Cloudflare requires TLS 1.2+. Without this,
+    // HttpSendRequestA below fails the handshake silently and the request
+    // never leaves the machine.
+#ifndef SECURITY_FLAG_SECURE
+#define SECURITY_FLAG_SECURE 0x00000001
+#endif
+    DWORD secFlags = 0;
+    DWORD secLen = sizeof(secFlags);
+    InternetQueryOptionA(hR, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, &secLen);
+    secFlags |= SECURITY_FLAG_SECURE
+             |  0x00000800 /*SECURITY_FLAG_STRENGTH_STRONG*/;
+    InternetSetOptionA(hR, INTERNET_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+#ifndef INTERNET_OPTION_SECURE_PROTOCOLS
+#define INTERNET_OPTION_SECURE_PROTOCOLS 84
+#endif
+    DWORD protoFlags = 0x00000800 /*TLS 1.2*/ | 0x00002000 /*TLS 1.3*/
+                      | 0x00000200 /*TLS 1.1 fallback*/;
+    InternetSetOptionA(hI, INTERNET_OPTION_SECURE_PROTOCOLS, &protoFlags, sizeof(protoFlags));
+
+    std::string hdrs="Content-Type: application/json\r\n";
+    if(!apiKey.empty()) hdrs+="X-API-Key: "+apiKey+"\r\n";
+
+    BOOL sent = HttpSendRequestA(hR,hdrs.c_str(),(DWORD)hdrs.size(),
+                                  (LPVOID)payload.c_str(),(DWORD)payload.size());
+    if(!sent){
+        DWORD err = GetLastError();
+        std::cout << "[API] HttpSendRequestA failed for " << endpoint
+                   << ", err=" << err;
+        if(err==ERROR_INTERNET_SECURITY_CHANNEL_ERROR ||
+           err==ERROR_INTERNET_INVALID_CA)
+            std::cout << " (TLS/certificate problem)";
+        else if(err==ERROR_INTERNET_CANNOT_CONNECT)
+            std::cout << " (cannot reach host — check network/firewall/AV)";
+        std::cout << "\n";
+        InternetCloseHandle(hR); InternetCloseHandle(hC); InternetCloseHandle(hI);
+        return response;
+    }
+
+    // Log HTTP status so a 4xx/5xx from the Worker is visible too
+    DWORD statusCode=0, statusLen=sizeof(statusCode);
+    HttpQueryInfoA(hR, HTTP_QUERY_STATUS_CODE|HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusLen, NULL);
+    if(statusCode!=200)
+        std::cout << "[API] " << endpoint << " returned HTTP " << statusCode << "\n";
+
+    char buf[8192]={}; DWORD rd=0;
+    while(InternetReadFile(hR,buf,sizeof(buf)-1,&rd)&&rd>0){response.append(buf,rd);rd=0;}
+    InternetCloseHandle(hR);InternetCloseHandle(hC);InternetCloseHandle(hI);
+    return response;
+}
+
+std::string RegisterSession()
+{
+    std::string payload=
+        "{\"hwid\":\""+JsonEscape(GetHWID())+"\","
+        "\"pc_name\":\""+JsonEscape(GetPCName())+"\","
+        "\"username\":\""+JsonEscape(GetUsername())+"\"}";
+    std::string resp=ApiPost("/api/register",payload);
+    const std::string tag="\"key\":\"";
+    size_t pos=resp.find(tag);
+    if(pos==std::string::npos) return "";
+    pos+=tag.size();
+    size_t end=resp.find("\"",pos);
+    if(end==std::string::npos) return "";
+    return resp.substr(pos,end-pos);
+}
+
+void SendWebEvent(const std::string& type,
+                  const std::string& title,
+                  const std::string& desc,
+                  const std::string& severity="HIGH")
+{
+    if(g_SessionKey.empty()) return;
+    std::string payload=
+        "{\"type\":\""+JsonEscape(type)+"\","
+        "\"title\":\""+JsonEscape(title)+"\","
+        "\"description\":\""+JsonEscape(desc)+"\","
+        "\"severity\":\""+severity+"\"}";
+    std::thread([payload,key=g_SessionKey](){
+        ApiPost("/api/event",payload,key);
+    }).detach();
+}
+
+void ApiHeartbeatLoop()
+{
+    while(true){
+        std::this_thread::sleep_for(std::chrono::seconds(25));
+        if(!g_SessionKey.empty())
+            std::thread([key=g_SessionKey](){ApiPost("/api/heartbeat","{}",key);}).detach();
+    }
+}
+// ============================================================
 
 typedef struct _SYSTEM_HANDLE {
     ULONG ProcessId;
@@ -429,10 +573,6 @@ void EnumerateAndTerminateWindowByStyle(DWORD processId) {
     EnumWindows(EnumWindowsCallback, (LPARAM)processId);
 }
 
-// wintrust এবং softpub include (এখানে একবার)
-#include <wintrust.h>
-#include <softpub.h>
-
 typedef LONG NTSTATUS;
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 #define ThreadQuerySetWin32StartAddress 9
@@ -584,7 +724,16 @@ static const std::vector<CheatSignature> g_Signatures = {
 
 bool ScanMemoryForPattern(HANDLE hProc, uintptr_t addr, SIZE_T size,
                            const std::vector<BYTE>& pattern)
-
+{
+    if (pattern.empty() || size < pattern.size()) return false;
+    std::vector<BYTE> buf(size);
+    SIZE_T read = 0;
+    if (!ReadProcessMemory(hProc, (LPCVOID)addr, buf.data(), size, &read)) return false;
+    for (size_t i = 0; i + pattern.size() <= read; i++) {
+        if (memcmp(&buf[i], pattern.data(), pattern.size()) == 0) return true;
+    }
+    return false;
+}
 
 void DetectCheatSignatures(DWORD pid)
 {
@@ -1268,7 +1417,14 @@ PVOID GetZwWriteVirtualMemoryAddress() {
     if (!ntdll) {
 
         return nullptr;
-    
+    }
+
+    FARPROC zwWriteVirtualMemory = GetProcAddress(ntdll, "ZwWriteVirtualMemory");
+    if (!zwWriteVirtualMemory) {
+
+        return nullptr;
+    }
+
     return (PVOID)((uintptr_t)zwWriteVirtualMemory);
 }
 
@@ -1506,7 +1662,20 @@ void MonitorTime()
                     << sec << " seconds\n";
 
                 // Discord Alert
-                
+                {
+                    std::ostringstream oss;
+                    oss << "**Time manipulation / Speed hack detected!**\n"
+                        << "Clock drift: `" << std::fixed << std::setprecision(3) << sec << " seconds`";
+                    std::string msg = oss.str();
+                    std::thread([msg]() {
+                        SendDiscordAlert("\xF0\x9F\x9A\xA8 TIME TAMPER DETECTED", msg, 0xFFAA00);
+                    }).detach();
+                }
+                SetConsoleTextAttribute(hCon, def);
+                Beep(750, 300);
+                tampered = true;
+            }
+        }
         else {
             tampered = false;
         }
@@ -1642,17 +1811,19 @@ std::wstring DropGuardianEXEAs(const std::wstring& targetName) {
 
 // ── Guardian launch করা — config command line-এ দেওয়া ──
 bool LaunchGuardian(const std::wstring& path, const std::string& id,
-                    const std::string& threadId, const std::string& webhookUrl) {
+                    const std::string& threadId, const std::string& webhookUrl,
+                    const std::string& sessionKey) {
     STARTUPINFOW si = { sizeof(si) };
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
 
-    // Format: "path" ID THREADID WEBHOOKURL
+    // Format: "path" ID THREADID WEBHOOKURL SESSIONKEY
     std::wstring wId      = std::wstring(id.begin(), id.end());
     std::wstring wTid     = std::wstring(threadId.begin(), threadId.end());
     std::wstring wWebhook = std::wstring(webhookUrl.begin(), webhookUrl.end());
-    std::wstring cmd = L"\"" + path + L"\" " + wId + L" " + wTid + L" " + wWebhook;
+    std::wstring wKey     = std::wstring(sessionKey.begin(), sessionKey.end());
+    std::wstring cmd = L"\"" + path + L"\" " + wId + L" " + wTid + L" " + wWebhook + L" " + wKey;
 
     bool ok = CreateProcessW(nullptr, &cmd[0], nullptr, nullptr,
         FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -1661,15 +1832,16 @@ bool LaunchGuardian(const std::wstring& path, const std::string& id,
 }
 
 // ── দুটো Guardian drop + launch ──
-void DropAndLaunchGuardian(const std::string& threadId, const std::string& webhookUrl) {
+void DropAndLaunchGuardian(const std::string& threadId, const std::string& webhookUrl,
+                            const std::string& sessionKey) {
     // Guardian-A
     std::wstring pathA = DropGuardianEXEAs(L"WinSvcHost32.exe");
-    if (!pathA.empty()) LaunchGuardian(pathA, "A", threadId, webhookUrl);
+    if (!pathA.empty()) LaunchGuardian(pathA, "A", threadId, webhookUrl, sessionKey);
 
     // Guardian-B
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::wstring pathB = DropGuardianEXEAs(L"SysMonHelper64.exe");
-    if (!pathB.empty()) LaunchGuardian(pathB, "B", threadId, webhookUrl);
+    if (!pathB.empty()) LaunchGuardian(pathB, "B", threadId, webhookUrl, sessionKey);
 }
 // ============================================================
 //  Detection thread গুলো suspend/kill হলে detect করবে
@@ -1800,18 +1972,43 @@ int main()
         sampm);
     std::cout << startBuf;
 
-    // ── Step 1: Discord-এ PC-র নামে Thread তৈরি ──
+    // ── Step 1: Web Dashboard Key Register করা ──
+    std::cout << "\n[RED EYE] Connecting to dashboard...\n";
+    g_SessionKey = RegisterSession();
+
+    if (!g_SessionKey.empty()) {
+        // Key console-এ বড় করে দেখানো
+        std::cout << "\n";
+        std::cout << "╔══════════════════════════════════════╗\n";
+        std::cout << "║                                      ║\n";
+        std::cout << "║   YOUR SESSION KEY:                  ║\n";
+        std::cout << "║                                      ║\n";
+        std::cout << "║   >>> " << g_SessionKey << " <<<        ║\n";
+        std::cout << "║                                      ║\n";
+        std::cout << "║   Enter this key on the dashboard    ║\n";
+        std::cout << "║   to view real-time detections.      ║\n";
+        std::cout << "║                                      ║\n";
+        std::cout << "╚══════════════════════════════════════╝\n\n";
+    } else {
+        std::cout << "[!] Dashboard offline — Discord only mode.\n\n";
+    }
+
+    // ── Step 2: Discord-এ PC-র নামে Thread তৈরি ──
     g_ThreadId = CreateDiscordThread();
 
-    // ── Step 2: Freeze Detection shared memory তৈরি ──
+    // ── Step 3: Freeze Detection shared memory তৈরি ──
     InitFreezeDetection();
     std::thread freezePing(FreezeDetectionPingLoop);
     freezePing.detach();
 
-    // ── Step 3: Guardian drop করে চালু করো (config সাথে দিয়ে) ──
+    // ── Step 4: Guardian drop করে চালু করো ──
     if (!g_ThreadId.empty()) {
-        DropAndLaunchGuardian(g_ThreadId, DISCORD_WEBHOOK_URL);
+        DropAndLaunchGuardian(g_ThreadId, DISCORD_WEBHOOK_URL, g_SessionKey);
     }
+
+    // ── Step 5: API Heartbeat thread ──
+    std::thread apiHb(ApiHeartbeatLoop);
+    apiHb.detach();
 
     // Heartbeat thread
     std::thread hbThread(HeartbeatLoop);
